@@ -106,14 +106,7 @@
       // Fetch fallback below.
     }
 
-    try {
-      const response = await fetch(img.currentSrc || img.src);
-      if (!response.ok) return null;
-      const blob = await response.blob();
-      return await blobToDataUrl(blob);
-    } catch {
-      return await extensionAvatarDataUrl(img);
-    }
+    return await urlToDataUrl(img.currentSrc || img.src, img);
   }
 
   async function inlineBackgroundImages() {
@@ -162,15 +155,48 @@
 
   async function urlToDataUrl(url, element) {
     try {
-      const response = await fetch(new URL(url, location.href).href);
+      const absoluteUrl = new URL(url, location.href).href;
+      const localDataUrl = await proxyLocalImageDataUrl(absoluteUrl);
+      if (localDataUrl) return localDataUrl;
+
+      const response = await fetch(absoluteUrl);
       if (!response.ok) return null;
       return await blobToDataUrl(await response.blob());
     } catch {
       return await extensionAvatarDataUrl({
         getAttribute: () => url,
-        alt: "",
+        alt: element?.alt || "",
         dataset: element?.dataset || {},
       });
+    }
+  }
+
+  async function proxyLocalImageDataUrl(url) {
+    if (
+      !url.startsWith("file:") ||
+      typeof chrome === "undefined" ||
+      !chrome.runtime?.sendMessage
+    ) {
+      return null;
+    }
+
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: "FIGMA_CAPTURE_FETCH_ASSET",
+        url,
+      });
+      if (!result?.ok || !result.base64) return null;
+
+      const dataUrl = `data:${result.contentType};base64,${result.base64}`;
+      if (!/^image\/svg\+xml(?:;|$)/i.test(result.contentType)) return dataUrl;
+
+      // Flatten SVGs with embedded photos before handing them to Figma.
+      const image = new Image();
+      image.src = dataUrl;
+      await image.decode();
+      return imageElementToDataUrl(image);
+    } catch {
+      return null;
     }
   }
 
